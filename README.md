@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE.txt)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg?style=flat-square)](#)
 
-A professional C# reference implementation demonstrating integration with **AuthLX**, a premium authentication, licensing, and security platform. This repository contains a fully self-contained C# SDK and an interactive console menu client featuring thread-safe logging, anti-tampering signatures, and debugger detection.
+A professional C# reference implementation demonstrating integration with **[AuthLX](https://authlx.com)**, a premium authentication, licensing, and security platform. This repository contains a fully self-contained C# SDK and an interactive console menu client featuring thread-safe logging, anti-tampering signatures, and debugger detection.
 
 ---
 
