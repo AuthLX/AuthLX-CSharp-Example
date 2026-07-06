@@ -9,9 +9,9 @@ namespace AuthLX_CSharp_Example
     internal class Program
     {
         public static api AuthLXApp = new api(
-    name: "Premium", 
-    ownerid: "22c71ed0-c61d-4816-b2a1-3ad0a72d9de1",
-    secret: "91cace5bbc7fe4fe3503972ac2c351cb91cd680126c4a55ac954484c24448d50",
+    name: "internal", 
+    ownerid: "2ec0f300-440e-4ee1-b23d-417b7da88f8e",
+    secret: "3b147f4218ea765e4e3496efd3ffdbf1046c81909813df0786e642e8d2a39ed5",
     version: "1.0"
 );
 
