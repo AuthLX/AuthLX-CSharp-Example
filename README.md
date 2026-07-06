@@ -31,7 +31,7 @@ A professional C# reference implementation demonstrating integration with **[Aut
 
 ## Key Features
 
-* **Zero External Dependencies**: Uses the native .NET Framework `JavaScriptSerializer` for lightweight, self-contained compilation without NuGet package restores.
+* **Zero External Dependencies**: Uses a custom, built-in `SimpleJson` engine for lightweight, self-contained compilation with zero NuGet package restores.
 * **Compatibility across C# App Types**: Engineered to run safely on Console, Windows Forms (WinForms), WPF, Class Libraries, and background services without crashes.
 * **Modern Thread-Safe Logger**: Concurrent logger writing to both console and log files (`logs/sdk.log`). Uses C# caller information attributes for compile-time filename and member extraction.
 * **Non-Blocking Network Queries**: Supports integration within asynchronous worker loops.
@@ -42,13 +42,16 @@ A professional C# reference implementation demonstrating integration with **[Aut
 ## Project Structure
 
 ```
-├── AuthLX CSharp Example/            # Main project folder
-│   ├── AuthLX.cs                     # Core C# SDK file (API, Logger, Security, Helpers)
-│   ├── Program.cs                    # Interactive console demo app
-│   ├── App.config                    # Standard application configuration
-│   └── AuthLX CSharp Example.csproj  # Visual Studio project file
+├── AuthLX.SDK/                       # SDK Library project (.NET Standard & Core)
+│   ├── AuthLX.cs                     # Core C# SDK (API, Logger, Security, SimpleJson)
+│   └── AuthLX.SDK.csproj             # SDK library project configuration
 │
-└── AuthLX CSharp Example.sln         # Main Visual Studio 2022 Solution
+├── AuthLX CSharp Example/            # Console Demo project (references SDK library)
+│   ├── Program.cs                    # Interactive console demo application
+│   ├── App.config                    # Standard application configuration
+│   └── AuthLX CSharp Example.csproj  # Example app project configuration
+│
+└── AuthLX CSharp Example.sln         # Visual Studio 2022 Solution
 ```
 
 ---
