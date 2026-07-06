@@ -82,9 +82,9 @@ Define a static instance of `AuthLX.api` as your global entry point:
 using AuthLX;
 
 public static api AuthLXApp = new api(
-    name: "Premium", 
-    ownerid: "22c71ed0-c61d-4816-b2a1-3ad0a72d9de1",
-    secret: "91cace5bbc7fe4fe3503972ac2c351cb91cd680126c4a55ac954484c24448d50",
+    name: "your_application_name", 
+    ownerid: "your_application_owner_id_from_dashboard",
+    secret: "your_application_secret_key_from_dashboard",
     version: "1.0"
 );
 ```
