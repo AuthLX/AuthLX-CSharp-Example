@@ -9,7 +9,6 @@ using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Threading;
-using Microsoft.Win32;
 
 namespace AuthLX
 {
@@ -201,10 +200,23 @@ namespace AuthLX
             {
                 try
                 {
-                    var user = WindowsIdentity.GetCurrent().User;
-                    if (user != null)
+                    Type type = Type.GetType("System.Security.Principal.WindowsIdentity, System.Security.Principal.Windows") 
+                                ?? Type.GetType("System.Security.Principal.WindowsIdentity, mscorlib");
+                    if (type != null)
                     {
-                        return user.Value;
+                        object current = type.GetMethod("GetCurrent", new Type[0]).Invoke(null, null);
+                        if (current != null)
+                        {
+                            object user = type.GetProperty("User").GetValue(current, null);
+                            if (user != null)
+                            {
+                                object value = user.GetType().GetProperty("Value").GetValue(user, null);
+                                if (value != null)
+                                {
+                                    return value.ToString();
+                                }
+                            }
+                        }
                     }
                 }
                 catch { }
@@ -214,16 +226,38 @@ namespace AuthLX
             {
                 try
                 {
-                    using (var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+                    Type registryKeyType = Type.GetType("Microsoft.Win32.RegistryKey, Microsoft.Win32.Registry")
+                                          ?? Type.GetType("Microsoft.Win32.RegistryKey, mscorlib");
+                    Type registryHiveType = Type.GetType("Microsoft.Win32.RegistryHive, Microsoft.Win32.Registry")
+                                            ?? Type.GetType("Microsoft.Win32.RegistryHive, mscorlib");
+                    Type registryViewType = Type.GetType("Microsoft.Win32.RegistryView, Microsoft.Win32.Registry")
+                                            ?? Type.GetType("Microsoft.Win32.RegistryView, mscorlib");
+
+                    if (registryKeyType != null && registryHiveType != null && registryViewType != null)
                     {
-                        using (var subKey = baseKey.OpenSubKey(@"SOFTWARE\Microsoft\Cryptography"))
+                        object localMachineHive = Enum.ToObject(registryHiveType, 0x80000002);
+                        object registry64View = Enum.ToObject(registryViewType, 2);
+
+                        var openBaseKeyMethod = registryKeyType.GetMethod("OpenBaseKey", new Type[] { registryHiveType, registryViewType });
+                        if (openBaseKeyMethod != null)
                         {
-                            if (subKey != null)
+                            using (var baseKey = openBaseKeyMethod.Invoke(null, new object[] { localMachineHive, registry64View }) as IDisposable)
                             {
-                                object value = subKey.GetValue("MachineGuid");
-                                if (value != null)
+                                if (baseKey != null)
                                 {
-                                    return value.ToString();
+                                    var openSubKeyMethod = registryKeyType.GetMethod("OpenSubKey", new Type[] { typeof(string) });
+                                    using (var subKey = openSubKeyMethod.Invoke(baseKey, new object[] { @"SOFTWARE\Microsoft\Cryptography" }) as IDisposable)
+                                    {
+                                        if (subKey != null)
+                                        {
+                                            var getValueMethod = registryKeyType.GetMethod("GetValue", new Type[] { typeof(string) });
+                                            object value = getValueMethod.Invoke(subKey, new object[] { "MachineGuid" });
+                                            if (value != null)
+                                            {
+                                                return value.ToString();
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
