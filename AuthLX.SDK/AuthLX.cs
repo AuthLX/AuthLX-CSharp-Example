@@ -9,7 +9,6 @@ using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Threading;
-using System.Web.Script.Serialization;
 using Microsoft.Win32;
 
 namespace AuthLX
@@ -289,8 +288,6 @@ namespace AuthLX
         private Thread ban_monitor_thread = null;
         private bool ban_monitor_active = false;
         private readonly object ban_monitor_lock = new object();
-
-        private readonly JavaScriptSerializer jsonSerializer = new JavaScriptSerializer();
 
         public api(string name, string ownerid, string version, string secret = "", string hashToCheck = "", string apiUrl = "")
         {
@@ -1016,7 +1013,7 @@ namespace AuthLX
                 request.Timeout = 5000;
                 request.ReadWriteTimeout = 5000;
 
-                string postDataStr = jsonSerializer.Serialize(postData);
+                string postDataStr = SimpleJson.Serialize(postData);
 
                 if (debug)
                 {
@@ -1026,7 +1023,7 @@ namespace AuthLX
                     {
                         safeData["password"] = "***";
                     }
-                    LogHelper.LogDebug($"→ POST {endpoint} {jsonSerializer.Serialize(safeData)}");
+                    LogHelper.LogDebug($"→ POST {endpoint} {SimpleJson.Serialize(safeData)}");
                 }
 
                 byte[] postBytes = Encoding.UTF8.GetBytes(postDataStr);
@@ -1048,7 +1045,7 @@ namespace AuthLX
                             LogHelper.LogDebug($"← {safeResp}");
                         }
 
-                        return jsonSerializer.Deserialize<Dictionary<string, object>>(respStr);
+                        return SimpleJson.Deserialize(respStr) as Dictionary<string, object>;
                     }
                 }
             }
@@ -1062,7 +1059,7 @@ namespace AuthLX
                         using (StreamReader reader = new StreamReader(wex.Response.GetResponseStream(), Encoding.UTF8))
                         {
                             string respStr = reader.ReadToEnd();
-                            var errorJson = jsonSerializer.Deserialize<Dictionary<string, object>>(respStr);
+                            var errorJson = SimpleJson.Deserialize(respStr) as Dictionary<string, object>;
                             if (errorJson != null && errorJson.ContainsKey("message"))
                             {
                                 errMsg = errorJson["message"].ToString();
@@ -1243,6 +1240,197 @@ namespace AuthLX
             }
 
             return payload;
+        }
+    }
+
+    public static class SimpleJson
+    {
+        public static object Deserialize(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            json = json.Trim();
+            int index = 0;
+            return ParseValue(json, ref index);
+        }
+
+        public static string Serialize(object obj)
+        {
+            if (obj == null) return "null";
+            if (obj is string s) return "\"" + EscapeString(s) + "\"";
+            if (obj is bool b) return b ? "true" : "false";
+            if (obj is double || obj is float || obj is int || obj is long) return obj.ToString();
+            
+            if (obj is IDictionary<string, object> dict)
+            {
+                StringBuilder sb = new StringBuilder();
+                sb.Append("{");
+                bool first = true;
+                foreach (var pair in dict)
+                {
+                    if (!first) sb.Append(",");
+                    first = false;
+                    sb.Append("\"").Append(EscapeString(pair.Key)).Append("\":").Append(Serialize(pair.Value));
+                }
+                sb.Append("}");
+                return sb.ToString();
+            }
+
+            if (obj is System.Collections.IEnumerable list)
+            {
+                StringBuilder sb = new StringBuilder();
+                sb.Append("[");
+                bool first = true;
+                foreach (var val in list)
+                {
+                    if (!first) sb.Append(",");
+                    first = false;
+                    sb.Append(Serialize(val));
+                }
+                sb.Append("]");
+                return sb.ToString();
+            }
+
+            return "\"" + EscapeString(obj.ToString()) + "\"";
+        }
+
+        private static string EscapeString(string s)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (char c in s)
+            {
+                if (c == '"') sb.Append("\\\"");
+                else if (c == '\\') sb.Append("\\\\");
+                else if (c == '\n') sb.Append("\\n");
+                else if (c == '\r') sb.Append("\\r");
+                else if (c == '\t') sb.Append("\\t");
+                else if (c < 32) sb.Append(string.Format("\\u{0:x4}", (int)c));
+                else sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
+        private static object ParseValue(string json, ref int index)
+        {
+            SkipWhitespace(json, ref index);
+            if (index >= json.Length) return null;
+
+            char c = json[index];
+            if (c == '{') return ParseObject(json, ref index);
+            if (c == '[') return ParseArray(json, ref index);
+            if (c == '"') return ParseString(json, ref index);
+            if (char.IsDigit(c) || c == '-') return ParseNumber(json, ref index);
+            if (c == 't' || c == 'f') return ParseBool(json, ref index);
+            if (c == 'n') { index += 4; return null; }
+
+            throw new Exception("Invalid JSON token at " + index);
+        }
+
+        private static Dictionary<string, object> ParseObject(string json, ref int index)
+        {
+            var dict = new Dictionary<string, object>();
+            index++; // skip '{'
+            SkipWhitespace(json, ref index);
+
+            while (index < json.Length && json[index] != '}')
+            {
+                if (json[index] == ',') { index++; SkipWhitespace(json, ref index); }
+                if (json[index] == '}') break;
+
+                string key = ParseString(json, ref index);
+                SkipWhitespace(json, ref index);
+                if (json[index] != ':') throw new Exception("Expected ':'");
+                index++; // skip ':'
+
+                object val = ParseValue(json, ref index);
+                dict[key] = val;
+                SkipWhitespace(json, ref index);
+            }
+            if (index < json.Length) index++; // skip '}'
+            return dict;
+        }
+
+        private static List<object> ParseArray(string json, ref int index)
+        {
+            var list = new List<object>();
+            index++; // skip '['
+            SkipWhitespace(json, ref index);
+
+            while (index < json.Length && json[index] != ']')
+            {
+                if (json[index] == ',') { index++; SkipWhitespace(json, ref index); }
+                if (json[index] == ']') break;
+
+                list.Add(ParseValue(json, ref index));
+                SkipWhitespace(json, ref index);
+            }
+            if (index < json.Length) index++; // skip ']'
+            return list;
+        }
+
+        private static string ParseString(string json, ref int index)
+        {
+            index++; // skip '"'
+            StringBuilder sb = new StringBuilder();
+            while (index < json.Length && json[index] != '"')
+            {
+                char c = json[index];
+                if (c == '\\')
+                {
+                    index++;
+                    if (index >= json.Length) break;
+                    char esc = json[index];
+                    if (esc == 'n') sb.Append('\n');
+                    else if (esc == 'r') sb.Append('\r');
+                    else if (esc == 't') sb.Append('\t');
+                    else sb.Append(esc);
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+                index++;
+            }
+            if (index < json.Length) index++; // skip '"'
+            return sb.ToString();
+        }
+
+        private static object ParseNumber(string json, ref int index)
+        {
+            int start = index;
+            while (index < json.Length && (char.IsDigit(json[index]) || json[index] == '.' || json[index] == '-' || json[index] == 'e' || json[index] == 'E' || json[index] == '+'))
+            {
+                index++;
+            }
+            string s = json.Substring(start, index - start);
+            if (s.Contains(".")) return double.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
+            return long.Parse(s);
+        }
+
+        private static bool ParseBool(string json, ref int index)
+        {
+            if (json[index] == 't') { index += 4; return true; }
+            index += 5;
+            return false;
+        }
+
+        private static void SkipWhitespace(string json, ref int index)
+        {
+            while (index < json.Length && char.IsWhiteSpace(json[index])) index++;
+        }
+    }
+
+    public static class Obfuscator
+    {
+        private static readonly byte[] Key = new byte[] { 0x4F, 0xBD, 0x2A, 0x76, 0x9C, 0xE1, 0x38, 0x5B };
+
+        public static string Decrypt(byte[] data)
+        {
+            byte[] decrypted = new byte[data.Length];
+            for (int i = 0; i < data.Length; i++)
+            {
+                decrypted[i] = (byte)(data[i] ^ Key[i % Key.Length]);
+            }
+            return Encoding.UTF8.GetString(decrypted);
         }
     }
 }
