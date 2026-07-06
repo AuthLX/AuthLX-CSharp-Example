@@ -196,65 +196,72 @@ namespace AuthLX
 
         public static string GetHWID(string method = "windows_user")
         {
-            if (method == "windows_user")
+            bool isWindows = Path.DirectorySeparatorChar == '\\';
+            bool isMac = !isWindows && Directory.Exists("/System/Library/CoreServices");
+            bool isLinux = !isWindows && !isMac;
+
+            if (isWindows)
             {
-                try
+                if (method == "windows_user")
                 {
-                    Type type = Type.GetType("System.Security.Principal.WindowsIdentity, System.Security.Principal.Windows") 
-                                ?? Type.GetType("System.Security.Principal.WindowsIdentity, mscorlib");
-                    if (type != null)
+                    try
                     {
-                        object current = type.GetMethod("GetCurrent", new Type[0]).Invoke(null, null);
-                        if (current != null)
+                        Type type = Type.GetType("System.Security.Principal.WindowsIdentity, System.Security.Principal.Windows") 
+                                    ?? Type.GetType("System.Security.Principal.WindowsIdentity, mscorlib");
+                        if (type != null)
                         {
-                            object user = type.GetProperty("User").GetValue(current, null);
-                            if (user != null)
+                            object current = type.GetMethod("GetCurrent", new Type[0]).Invoke(null, null);
+                            if (current != null)
                             {
-                                object value = user.GetType().GetProperty("Value").GetValue(user, null);
-                                if (value != null)
+                                object user = type.GetProperty("User").GetValue(current, null);
+                                if (user != null)
                                 {
-                                    return value.ToString();
+                                    object value = user.GetType().GetProperty("Value").GetValue(user, null);
+                                    if (value != null)
+                                    {
+                                        return value.ToString();
+                                    }
                                 }
                             }
                         }
                     }
+                    catch { }
+                    return "Unknown-Windows-User-HWID";
                 }
-                catch { }
-                return "Unknown-Windows-User-HWID";
-            }
-            else
-            {
-                try
+                else
                 {
-                    Type registryKeyType = Type.GetType("Microsoft.Win32.RegistryKey, Microsoft.Win32.Registry")
-                                          ?? Type.GetType("Microsoft.Win32.RegistryKey, mscorlib");
-                    Type registryHiveType = Type.GetType("Microsoft.Win32.RegistryHive, Microsoft.Win32.Registry")
-                                            ?? Type.GetType("Microsoft.Win32.RegistryHive, mscorlib");
-                    Type registryViewType = Type.GetType("Microsoft.Win32.RegistryView, Microsoft.Win32.Registry")
-                                            ?? Type.GetType("Microsoft.Win32.RegistryView, mscorlib");
-
-                    if (registryKeyType != null && registryHiveType != null && registryViewType != null)
+                    try
                     {
-                        object localMachineHive = Enum.ToObject(registryHiveType, 0x80000002);
-                        object registry64View = Enum.ToObject(registryViewType, 2);
+                        Type registryKeyType = Type.GetType("Microsoft.Win32.RegistryKey, Microsoft.Win32.Registry")
+                                              ?? Type.GetType("Microsoft.Win32.RegistryKey, mscorlib");
+                        Type registryHiveType = Type.GetType("Microsoft.Win32.RegistryHive, Microsoft.Win32.Registry")
+                                                ?? Type.GetType("Microsoft.Win32.RegistryHive, mscorlib");
+                        Type registryViewType = Type.GetType("Microsoft.Win32.RegistryView, Microsoft.Win32.Registry")
+                                                ?? Type.GetType("Microsoft.Win32.RegistryView, mscorlib");
 
-                        var openBaseKeyMethod = registryKeyType.GetMethod("OpenBaseKey", new Type[] { registryHiveType, registryViewType });
-                        if (openBaseKeyMethod != null)
+                        if (registryKeyType != null && registryHiveType != null && registryViewType != null)
                         {
-                            using (var baseKey = openBaseKeyMethod.Invoke(null, new object[] { localMachineHive, registry64View }) as IDisposable)
+                            object localMachineHive = Enum.ToObject(registryHiveType, 0x80000002);
+                            object registry64View = Enum.ToObject(registryViewType, 2);
+
+                            var openBaseKeyMethod = registryKeyType.GetMethod("OpenBaseKey", new Type[] { registryHiveType, registryViewType });
+                            if (openBaseKeyMethod != null)
                             {
-                                if (baseKey != null)
+                                using (var baseKey = openBaseKeyMethod.Invoke(null, new object[] { localMachineHive, registry64View }) as IDisposable)
                                 {
-                                    var openSubKeyMethod = registryKeyType.GetMethod("OpenSubKey", new Type[] { typeof(string) });
-                                    using (var subKey = openSubKeyMethod.Invoke(baseKey, new object[] { @"SOFTWARE\Microsoft\Cryptography" }) as IDisposable)
+                                    if (baseKey != null)
                                     {
-                                        if (subKey != null)
+                                        var openSubKeyMethod = registryKeyType.GetMethod("OpenSubKey", new Type[] { typeof(string) });
+                                        using (var subKey = openSubKeyMethod.Invoke(baseKey, new object[] { @"SOFTWARE\Microsoft\Cryptography" }) as IDisposable)
                                         {
-                                            var getValueMethod = registryKeyType.GetMethod("GetValue", new Type[] { typeof(string) });
-                                            object value = getValueMethod.Invoke(subKey, new object[] { "MachineGuid" });
-                                            if (value != null)
+                                            if (subKey != null)
                                             {
-                                                return value.ToString();
+                                                var getValueMethod = registryKeyType.GetMethod("GetValue", new Type[] { typeof(string) });
+                                                object value = getValueMethod.Invoke(subKey, new object[] { "MachineGuid" });
+                                                if (value != null)
+                                                {
+                                                    return value.ToString();
+                                                }
                                             }
                                         }
                                     }
@@ -262,10 +269,54 @@ namespace AuthLX
                             }
                         }
                     }
+                    catch { }
+                    return "Unknown-Windows-Machine-HWID";
+                }
+            }
+            else if (isLinux)
+            {
+                try
+                {
+                    if (File.Exists("/etc/machine-id"))
+                    {
+                        return File.ReadAllText("/etc/machine-id").Trim();
+                    }
+                    if (File.Exists("/var/lib/dbus/machine-id"))
+                    {
+                        return File.ReadAllText("/var/lib/dbus/machine-id").Trim();
+                    }
                 }
                 catch { }
-                return "Unknown-Windows-Machine-HWID";
+                return "Unknown-Linux-Machine-HWID";
             }
+            else if (isMac)
+            {
+                try
+                {
+                    using (var process = new Process())
+                    {
+                        process.StartInfo = new ProcessStartInfo
+                        {
+                            FileName = "sysctl",
+                            Arguments = "-n kern.uuid",
+                            UseShellExecute = false,
+                            RedirectStandardOutput = true,
+                            CreateNoWindow = true
+                        };
+                        process.Start();
+                        string output = process.StandardOutput.ReadToEnd();
+                        process.WaitForExit();
+                        if (!string.IsNullOrEmpty(output))
+                        {
+                            return output.Trim();
+                        }
+                    }
+                }
+                catch { }
+                return "Unknown-Mac-Hardware-HWID";
+            }
+
+            return "Unknown-Generic-HWID";
         }
     }
 
