@@ -9,10 +9,10 @@ namespace AuthLX_CSharp_Example
     internal class Program
     {
         public static api AuthLXApp = new api(
-    name: "your_application_name", 
-    ownerid: "your_application_owner_id_from_dashboard",
-    secret: "your_application_secret_key_from_dashboard",
-    version: "1.0"
+    name: "fakelag", 
+    ownerid: "0980ac9c-586d-44d0-8719-3dd9fbcec374",
+    secret: "744d4489c4edeea10be71f7f92e94cd0103ca2b44b3cb24d975304288e7454ad",
+    version: "1.3"
 );
 
         private static void ClearConsole()
@@ -356,7 +356,7 @@ namespace AuthLX_CSharp_Example
             api authlxapp = AuthLXApp;
 
             // Configure allowed hosts locking whitelist
-            authlxapp.set_allowed_hosts(new List<string> { "authlx.com" });
+            authlxapp.set_allowed_hosts(new List<string> { "api.authlx.com" });
 
             Console.WriteLine($"✓ Initialised in {(string.IsNullOrEmpty(authlxapp.client_secret) ? "OFF" : "SECURE")} mode.");
             Console.WriteLine($"  HWID Method : {authlxapp.hwid_method}");
