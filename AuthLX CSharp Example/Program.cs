@@ -69,6 +69,7 @@ namespace AuthLX_CSharp_Example
             Console.WriteLine("  [6]  Verify Standalone API Token");
             Console.WriteLine("  [7]  Show HWID methods");
             Console.WriteLine("  [8]  Debug Info");
+            Console.WriteLine("  [9]  Check & Install Updates");
             Console.WriteLine("  [0]  Exit");
             return GetInput("\n  › ");
         }
@@ -343,6 +344,35 @@ namespace AuthLX_CSharp_Example
             }
         }
 
+        private static void ExampleCheckUpdates(api authlxapp)
+        {
+            Console.WriteLine("\n── CHECK & INSTALL UPDATES ─────────────────────────────");
+            Console.WriteLine($"  Current Version : {authlxapp.version}");
+            Console.WriteLine("  Checking server for latest release...");
+
+            UpdateInfo info = authlxapp.CheckForUpdates();
+            Console.WriteLine($"  Latest Version  : {(string.IsNullOrEmpty(info.latest_version) ? "Unknown" : info.latest_version)}");
+
+            if (info.update_available)
+            {
+                Console.WriteLine($"  ✓ Update Available! (v{info.current_version} → v{info.latest_version})");
+                Console.WriteLine($"  Download URL    : {info.download_url}");
+                string choice = GetInput("\n  Install update now? (y/N): ");
+                if (choice.Equals("y", StringComparison.OrdinalIgnoreCase))
+                {
+                    authlxapp.PerformUpdate(info);
+                }
+                else
+                {
+                    Console.WriteLine("  Update deferred by user.");
+                }
+            }
+            else
+            {
+                Console.WriteLine("  ✓ You are running the latest version.");
+            }
+        }
+
         static void Main(string[] args)
         {
             // Set console output to support unicode borders and emojis
@@ -413,6 +443,10 @@ namespace AuthLX_CSharp_Example
                     else if (opt == "8")
                     {
                         ExampleDebugInfo(authlxapp);
+                    }
+                    else if (opt == "9")
+                    {
+                        ExampleCheckUpdates(authlxapp);
                     }
                     else if (opt == "0")
                     {

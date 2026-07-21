@@ -341,6 +341,16 @@ namespace AuthLX
         public double auth_runtime_start { get; set; } = 0.0;
     }
 
+    public class UpdateInfo
+    {
+        public bool update_available { get; set; } = false;
+        public string current_version { get; set; } = "";
+        public string latest_version { get; set; } = "";
+        public string download_url { get; set; } = "";
+        public string file_name { get; set; } = "";
+        public string release_notes { get; set; } = "";
+    }
+
     // ─── Main SDK API Class ──────────────────────────────────────────────────
 
     public class api
@@ -355,6 +365,10 @@ namespace AuthLX
         public bool initialized { get; private set; } = false;
         public string hwid_method { get; private set; } = "windows_user";
         public UserData user_data { get; private set; } = new UserData();
+
+        // Auto-Updater fields
+        public bool auto_update_enabled { get; set; } = true;
+        public UpdateInfo update_info { get; private set; } = new UpdateInfo();
 
         public string ban_reason { get; private set; } = "";
         public string ban_revoke_date { get; private set; } = "";
@@ -396,6 +410,20 @@ namespace AuthLX
 
         public void init()
         {
+            // Intercept --authlx-update-finish stage before anything else
+            HandleUpdateStage();
+
+            // Cleanup previous .old backup if it exists
+            string currentExe = GetCurrentExecutablePath();
+            if (!string.IsNullOrEmpty(currentExe))
+            {
+                string oldBackup = currentExe + ".old";
+                if (File.Exists(oldBackup))
+                {
+                    try { File.Delete(oldBackup); } catch { }
+                }
+            }
+
             Others.AntiDebug();
 
             var payload = new Dictionary<string, object>
@@ -429,16 +457,14 @@ namespace AuthLX
                         LogHelper.LogError($"[UPDATE REQUIRED] Application version is outdated! Current: {version} | Required: {serverVersion}");
                         last_message = $"Application version is outdated! Current: {version} | Required: {serverVersion}";
 
-                        string autoUpdate = appInfo.ContainsKey("auto_update_link") ? appInfo["auto_update_link"].ToString() : "";
-                        string webloader = appInfo.ContainsKey("webloader_link") ? appInfo["webloader_link"].ToString() : "";
-
-                        if (!string.IsNullOrEmpty(autoUpdate))
+                        if (auto_update_enabled)
                         {
-                            LogHelper.LogInfo($"Download auto-update: {autoUpdate}");
-                        }
-                        if (!string.IsNullOrEmpty(webloader))
-                        {
-                            LogHelper.LogInfo($"Webloader link: {webloader}");
+                            LogHelper.LogInfo($"[AUTO-UPDATE] Initiating auto-update to v{serverVersion}...");
+                            UpdateInfo info = CheckForUpdates();
+                            if (info.update_available)
+                            {
+                                PerformUpdate(info);
+                            }
                         }
 
                         initialized = false;
@@ -1327,6 +1353,252 @@ namespace AuthLX
             }
 
             return payload;
+        }
+
+        // ─── Auto-Updater ────────────────────────────────────────────────────────
+
+        public static string GetCurrentExecutablePath()
+        {
+            try
+            {
+                string path = Process.GetCurrentProcess().MainModule?.FileName;
+                if (!string.IsNullOrEmpty(path) && File.Exists(path))
+                {
+                    return path;
+                }
+            }
+            catch { }
+
+            try
+            {
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                string friendlyName = AppDomain.CurrentDomain.FriendlyName;
+                string combined = Path.Combine(baseDir, friendlyName);
+                if (File.Exists(combined)) return combined;
+            }
+            catch { }
+
+            return Environment.GetCommandLineArgs()[0];
+        }
+
+        public static void HandleUpdateStage()
+        {
+            try
+            {
+                string[] args = Environment.GetCommandLineArgs();
+                int finishIndex = Array.IndexOf(args, "--authlx-update-finish");
+                if (finishIndex == -1 || finishIndex + 1 >= args.Length) return;
+
+                string targetPath = args[finishIndex + 1];
+                if (string.IsNullOrEmpty(targetPath)) return;
+
+                string currentPath = GetCurrentExecutablePath();
+                if (string.IsNullOrEmpty(currentPath)) return;
+
+                // Wait until targetPath process exits and releases file lock (up to 10s)
+                int retries = 50;
+                while (retries-- > 0)
+                {
+                    try
+                    {
+                        using (FileStream fs = File.Open(targetPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                        {
+                            break;
+                        }
+                    }
+                    catch
+                    {
+                        Thread.Sleep(200);
+                    }
+                }
+
+                string backupPath = targetPath + ".old";
+                if (File.Exists(backupPath))
+                {
+                    try { File.Delete(backupPath); } catch { }
+                }
+
+                File.Move(targetPath, backupPath);
+                File.Move(currentPath, targetPath);
+
+                // Spawn original application process
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = targetPath,
+                    UseShellExecute = true
+                });
+
+                Environment.Exit(0);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError($"[AUTO-UPDATE STAGE 2 ERROR] {ex.Message}");
+            }
+        }
+
+        private bool DownloadFileHttp(string url, string targetPath)
+        {
+            if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(targetPath)) return false;
+
+            try
+            {
+                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+                request.Method = "GET";
+                request.UserAgent = $"AuthLX-SDK-CSharp/1.0 ({name} v{version})";
+                request.AllowAutoRedirect = true;
+                request.Timeout = 15000;
+
+                using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                {
+                    if (response.StatusCode == HttpStatusCode.OK)
+                    {
+                        using (Stream inputStream = response.GetResponseStream())
+                        using (FileStream outputStream = File.Create(targetPath))
+                        {
+                            byte[] buffer = new byte[16384];
+                            int bytesRead;
+                            while ((bytesRead = inputStream.Read(buffer, 0, buffer.Length)) > 0)
+                            {
+                                outputStream.Write(buffer, 0, bytesRead);
+                            }
+                        }
+
+                        FileInfo fi = new FileInfo(targetPath);
+                        return fi.Exists && fi.Length > 0;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError($"[DOWNLOAD ERROR] Failed to download update: {ex.Message}");
+            }
+            return false;
+        }
+
+        public UpdateInfo CheckForUpdates()
+        {
+            UpdateInfo info = new UpdateInfo
+            {
+                current_version = version
+            };
+
+            var payload = new Dictionary<string, object>
+            {
+                { "app_id", ownerid },
+                { "name", name },
+                { "version", version },
+                { "secret", string.IsNullOrEmpty(client_secret) ? "NO_SECRET" : client_secret }
+            };
+
+            string latestVer = "";
+            string dlUrl = "";
+            string fileN = "";
+
+            // 1. Query /init
+            var response = DoRequest("/init", payload);
+            if (response != null && response.ContainsKey("status") && response["status"].ToString() == "success")
+            {
+                var appInfo = response.ContainsKey("app_info") ? response["app_info"] as Dictionary<string, object> : null;
+                if (appInfo != null)
+                {
+                    latestVer = appInfo.ContainsKey("version") ? appInfo["version"].ToString() : "";
+                    dlUrl = appInfo.ContainsKey("auto_update_link") ? appInfo["auto_update_link"].ToString() : "";
+                }
+            }
+
+            // 2. Query /file/latest
+            var fileRes = DoRequest("/file/latest", payload);
+            if (fileRes != null && fileRes.ContainsKey("status") && fileRes["status"].ToString() == "success")
+            {
+                var data = fileRes.ContainsKey("data") ? fileRes["data"] as Dictionary<string, object> : null;
+                var fileObj = data != null && data.ContainsKey("file") ? data["file"] as Dictionary<string, object> : null;
+                if (fileObj != null)
+                {
+                    if (string.IsNullOrEmpty(latestVer) && fileObj.ContainsKey("version_tag"))
+                    {
+                        latestVer = fileObj["version_tag"].ToString();
+                    }
+                    if (string.IsNullOrEmpty(dlUrl) && fileObj.ContainsKey("download_url"))
+                    {
+                        dlUrl = fileObj["download_url"].ToString();
+                    }
+                    if (fileObj.ContainsKey("name"))
+                    {
+                        fileN = fileObj["name"].ToString();
+                    }
+                }
+            }
+
+            if (string.IsNullOrEmpty(dlUrl))
+            {
+                dlUrl = $"{api_url}/file/latest/download?app_id={ownerid}";
+            }
+
+            info.latest_version = string.IsNullOrEmpty(latestVer) ? version : latestVer;
+            info.download_url = dlUrl;
+            info.file_name = fileN;
+
+            if (!string.IsNullOrEmpty(info.latest_version) && info.latest_version != version)
+            {
+                info.update_available = true;
+            }
+
+            this.update_info = info;
+            return info;
+        }
+
+        public bool PerformUpdate(UpdateInfo info)
+        {
+            if (info == null || !info.update_available || string.IsNullOrEmpty(info.download_url))
+            {
+                LogHelper.LogError("[AUTO-UPDATE] No valid update download URL available.");
+                return false;
+            }
+
+            string currentExe = GetCurrentExecutablePath();
+            if (string.IsNullOrEmpty(currentExe))
+            {
+                LogHelper.LogError("[AUTO-UPDATE] Could not determine current binary path.");
+                return false;
+            }
+
+            string newTempPath = currentExe + ".new";
+            LogHelper.LogInfo($"[AUTO-UPDATE] Downloading update from: {info.download_url}");
+
+            if (!DownloadFileHttp(info.download_url, newTempPath))
+            {
+                LogHelper.LogError("[AUTO-UPDATE] Download failed.");
+                if (File.Exists(newTempPath))
+                {
+                    try { File.Delete(newTempPath); } catch { }
+                }
+                return false;
+            }
+
+            LogHelper.LogInfo("[AUTO-UPDATE] Download completed successfully. Launching process handoff...");
+
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = newTempPath,
+                    Arguments = $"--authlx-update-finish \"{currentExe}\"",
+                    UseShellExecute = true
+                });
+
+                LogHelper.LogInfo("[AUTO-UPDATE] Handed off execution to updated binary. Terminating old process.");
+                Environment.Exit(0);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError($"[AUTO-UPDATE] Failed to spawn updater process: {ex.Message}");
+                if (File.Exists(newTempPath))
+                {
+                    try { File.Delete(newTempPath); } catch { }
+                }
+                return false;
+            }
         }
     }
 
