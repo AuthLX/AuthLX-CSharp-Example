@@ -1452,17 +1452,42 @@ namespace AuthLX
                 {
                     if (response.StatusCode == HttpStatusCode.OK)
                     {
+                        long totalBytes   = response.ContentLength; // -1 if unknown
+                        long downloaded   = 0;
+                        int  lastPct      = -1;
+
                         using (Stream inputStream = response.GetResponseStream())
                         using (FileStream outputStream = File.Create(targetPath))
                         {
-                            byte[] buffer = new byte[16384];
+                            byte[] buffer = new byte[65536];
                             int bytesRead;
                             while ((bytesRead = inputStream.Read(buffer, 0, buffer.Length)) > 0)
                             {
                                 outputStream.Write(buffer, 0, bytesRead);
+                                downloaded += bytesRead;
+
+                                if (totalBytes > 0)
+                                {
+                                    int pct = (int)(downloaded * 100L / totalBytes);
+                                    if (pct != lastPct)
+                                    {
+                                        int filled = pct / 5;
+                                        string bar = new string('█', filled) + new string('░', 20 - filled);
+                                        double mbDone  = downloaded / (1024.0 * 1024.0);
+                                        double mbTotal = totalBytes  / (1024.0 * 1024.0);
+                                        Console.Write($"\r  [{bar}] {pct,3}%  {mbDone:F1} / {mbTotal:F1} MB");
+                                        lastPct = pct;
+                                    }
+                                }
+                                else
+                                {
+                                    double mbDone = downloaded / (1024.0 * 1024.0);
+                                    Console.Write($"\r  Downloading... {mbDone:F1} MB");
+                                }
                             }
                         }
 
+                        Console.WriteLine(); // newline after progress bar
                         FileInfo fi = new FileInfo(targetPath);
                         return fi.Exists && fi.Length > 0;
                     }
@@ -1470,6 +1495,7 @@ namespace AuthLX
             }
             catch (Exception ex)
             {
+                Console.WriteLine(); // newline if progress was mid-line
                 LogHelper.LogError($"[DOWNLOAD ERROR] Failed to download update: {ex.Message}");
             }
             return false;
