@@ -125,6 +125,9 @@ namespace AuthLX
         public static void LogWarn(string msg, [CallerFilePath] string file = "", [CallerLineNumber] int line = 0, [CallerMemberName] string func = "")
             => Logger.Instance.Log(LogLevel.WarnLevel, msg, file, line, func);
 
+        public static void LogWarning(string msg, [CallerFilePath] string file = "", [CallerLineNumber] int line = 0, [CallerMemberName] string func = "")
+            => Logger.Instance.Log(LogLevel.WarnLevel, msg, file, line, func);
+
         public static void LogError(string msg, [CallerFilePath] string file = "", [CallerLineNumber] int line = 0, [CallerMemberName] string func = "")
             => Logger.Instance.Log(LogLevel.ErrorLevel, msg, file, line, func);
     }
@@ -1436,6 +1439,80 @@ namespace AuthLX
             }
         }
 
+        private (bool isValid, string errorMessage) ValidateDownloadUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+                return (false, "No download URL provided. Set the auto_update_link in your AuthLX Dashboard.");
+
+            if (!url.StartsWith("http://") && !url.StartsWith("https://"))
+                return (false, $"Invalid URL format: '{url}'. URL must start with http:// or https://.");
+
+            try
+            {
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                req.Method = "HEAD";
+                req.UserAgent = $"AuthLX-SDK-CSharp/1.0 ({name} v{version})";
+                req.AllowAutoRedirect = true;
+                req.Timeout = 10000;
+
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                {
+                    int status = (int)resp.StatusCode;
+
+                    if (status == 404)
+                        return (false,
+                            $"Download URL returned 404 Not Found.\n" +
+                            $"  URL: {url}\n" +
+                            $"  \u2192 The file may have been deleted or the URL is incorrect.\n" +
+                            $"  \u2192 Please upload the update file and set the correct URL in your Dashboard.");
+
+                    if (status == 403)
+                        return (false,
+                            $"Download URL returned 403 Forbidden.\n" +
+                            $"  URL: {url}\n" +
+                            $"  \u2192 The server is blocking access. Check file permissions or use a public link.");
+
+                    if (status >= 400)
+                        return (false,
+                            $"Download URL returned HTTP {status}.\n" +
+                            $"  URL: {url}\n" +
+                            $"  \u2192 Please verify the URL is correct and the file is publicly accessible.");
+
+                    string ct = resp.ContentType?.ToLower() ?? "";
+                    if (ct.Contains("text/html"))
+                        return (false,
+                            $"The URL does not point to a direct file download.\n" +
+                            $"  URL: {url}\n" +
+                            $"  Content-Type received: {ct}\n" +
+                            $"  \ud83d\udca1 Tip: Use a direct download link, not a webpage URL.\n" +
+                            $"      Example: https://example.com/files/myapp-v2.0 (no HTML, no login page)");
+
+                    return (true, "");
+                }
+            }
+            catch (WebException wex) when (wex.Response is HttpWebResponse errResp)
+            {
+                int status = (int)errResp.StatusCode;
+                if (status == 404)
+                    return (false,
+                        $"Download URL returned 404 Not Found.\n" +
+                        $"  URL: {url}\n" +
+                        $"  \u2192 Upload the update file and set the correct URL in your Dashboard.");
+                return (false,
+                    $"Server returned HTTP {status}.\n" +
+                    $"  URL: {url}\n" +
+                    $"  \u2192 Please verify the URL is correct and the file is publicly accessible.");
+            }
+            catch (Exception ex)
+            {
+                return (false,
+                    $"Could not reach the download URL.\n" +
+                    $"  URL: {url}\n" +
+                    $"  Error: {ex.Message}\n" +
+                    $"  \u2192 Check your internet connection and verify the URL is reachable.");
+            }
+        }
+
         private bool DownloadFileHttp(string url, string targetPath)
         {
             if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(targetPath)) return false;
@@ -1557,6 +1634,15 @@ namespace AuthLX
 
             if (string.IsNullOrEmpty(dlUrl))
             {
+                if (!string.IsNullOrEmpty(info.latest_version) && info.latest_version != version)
+                {
+                    LogHelper.LogWarning(
+                        $"[AUTO-UPDATE] A new version ({info.latest_version}) was found but no download URL is set.\n" +
+                        $"  \u2192 Go to Dashboard \u2192 Files \u2192 Upload the update binary.\n" +
+                        $"  \ud83d\udca1 Tip: Set a direct download link as the auto_update_link (not a webpage, not a redirect page)."
+                    );
+                }
+                // Fallback: generic download endpoint
                 dlUrl = $"{api_url}/file/latest/download?app_id={ownerid}";
             }
 
@@ -1575,9 +1661,30 @@ namespace AuthLX
 
         public bool PerformUpdate(UpdateInfo info)
         {
-            if (info == null || !info.update_available || string.IsNullOrEmpty(info.download_url))
+            if (info == null || !info.update_available)
             {
-                LogHelper.LogError("[AUTO-UPDATE] No valid update download URL available.");
+                LogHelper.LogError("[AUTO-UPDATE] No update is available to install.");
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(info.download_url))
+            {
+                LogHelper.LogError(
+                    "[AUTO-UPDATE] Cannot install update: no download URL is available.\n" +
+                    "  \u2192 Upload the update binary in your AuthLX Dashboard \u2192 Files section.\n" +
+                    "  \ud83d\udca1 Tip: The auto_update_link must be a DIRECT download URL (binary/executable), not a webpage."
+                );
+                return false;
+            }
+
+            // Validate URL before downloading
+            LogHelper.LogInfo($"[AUTO-UPDATE] Validating download URL: {info.download_url}");
+            Console.WriteLine("  \ud83d\udca1 Tip: Make sure the URL above is a direct download link, not a webpage.");
+            var (isValid, errMsg) = ValidateDownloadUrl(info.download_url);
+            if (!isValid)
+            {
+                LogHelper.LogError($"[AUTO-UPDATE] URL validation failed:\n{errMsg}");
+                LogHelper.LogError("[AUTO-UPDATE] Continuing without update. The application will keep running the current version.");
                 return false;
             }
 
@@ -1593,7 +1700,10 @@ namespace AuthLX
 
             if (!DownloadFileHttp(info.download_url, newTempPath))
             {
-                LogHelper.LogError("[AUTO-UPDATE] Download failed.");
+                LogHelper.LogError(
+                    "[AUTO-UPDATE] Download failed. The application will keep running the current version.\n" +
+                    "  \ud83d\udca1 Tip: Ensure the auto_update_link in your Dashboard is a direct download URL."
+                );
                 if (File.Exists(newTempPath))
                 {
                     try { File.Delete(newTempPath); } catch { }
