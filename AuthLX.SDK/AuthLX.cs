@@ -691,6 +691,104 @@ namespace AuthLX
             return false;
         }
 
+        // ─── Variable Management (Global & Per-User Variables) ───────────────────
+
+        /// <summary>
+        /// Fetches a Global Application Variable by name.
+        /// If logged in, session_token is automatically included for authenticated variables.
+        /// </summary>
+        /// <param name="name">Name of the global variable set in the AuthLX Dashboard.</param>
+        /// <returns>String value of the variable, or empty string on failure.</returns>
+        public string Var(string name)
+        {
+            if (!checkinit()) return "";
+
+            var payload = new Dictionary<string, object>
+            {
+                { "app_id", ownerid },
+                { "secret", client_secret },
+                { "variable_name", name }
+            };
+
+            if (!string.IsNullOrEmpty(session_token))
+            {
+                payload["session_token"] = session_token;
+            }
+
+            var response = DoRequest("/var", payload);
+
+            if (response != null && response.ContainsKey("status") && response["status"].ToString() == "success")
+            {
+                if (response.ContainsKey("data") && response["data"] is Dictionary<string, object> data)
+                {
+                    return data.ContainsKey("value") ? data["value"]?.ToString() ?? "" : "";
+                }
+            }
+            return "";
+        }
+
+        /// <summary>
+        /// Fetches a Per-User Variable for the currently logged in user session.
+        /// </summary>
+        /// <param name="key">Key/Name of the user variable.</param>
+        /// <returns>String value of the user variable, or empty string if not found.</returns>
+        public string GetUserVar(string key)
+        {
+            if (!checkinit()) return "";
+            if (string.IsNullOrEmpty(session_token))
+            {
+                LogHelper.LogError("Session token required to fetch user variables. Please log in first.");
+                return "";
+            }
+
+            var payload = new Dictionary<string, object>
+            {
+                { "app_id", ownerid },
+                { "secret", client_secret },
+                { "session_token", session_token },
+                { "key", key }
+            };
+
+            var response = DoRequest("/vars/user/get", payload);
+
+            if (response != null && response.ContainsKey("status") && response["status"].ToString() == "success")
+            {
+                if (response.ContainsKey("data") && response["data"] is Dictionary<string, object> data)
+                {
+                    return data.ContainsKey("value") ? data["value"]?.ToString() ?? "" : "";
+                }
+            }
+            return "";
+        }
+
+        /// <summary>
+        /// Creates or updates a Per-User Variable for the currently logged in user.
+        /// </summary>
+        /// <param name="key">Key/Name of the user variable.</param>
+        /// <param name="value">Value to store for the user.</param>
+        /// <returns>True if saved successfully, False if failed or read-only.</returns>
+        public bool SetUserVar(string key, string value)
+        {
+            if (!checkinit()) return false;
+            if (string.IsNullOrEmpty(session_token))
+            {
+                LogHelper.LogError("Session token required to set user variables. Please log in first.");
+                return false;
+            }
+
+            var payload = new Dictionary<string, object>
+            {
+                { "app_id", ownerid },
+                { "secret", client_secret },
+                { "session_token", session_token },
+                { "key", key },
+                { "value", value }
+            };
+
+            var response = DoRequest("/vars/user/set", payload);
+            return response != null && response.ContainsKey("status") && response["status"].ToString() == "success";
+        }
+
         // ─── License Operations ──────────────────────────────────────────────────
 
         public bool upgrade(string user, string licenseKey)
