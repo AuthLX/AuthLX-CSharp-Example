@@ -475,10 +475,8 @@ namespace AuthLX
                         {
                             LogHelper.LogInfo($"[AUTO-UPDATE] Initiating auto-update to {serverVersion}...");
                             UpdateInfo info = CheckForUpdates();
-                            if (info.update_available)
-                            {
-                                PerformUpdate(info);
-                            }
+                            info.update_available = true;
+                            PerformUpdate(info);
                         }
 
                         initialized = false;
@@ -1694,61 +1692,95 @@ namespace AuthLX
                 current_version = version
             };
 
-            var payload = new Dictionary<string, object>
+            try
             {
-                { "app_id", ownerid },
-                { "name", name },
-                { "version", version },
-                { "secret", string.IsNullOrEmpty(client_secret) ? "NO_SECRET" : client_secret }
-            };
-
-            string latestVer = "";
-            string dlUrl = "";
-            string fileN = "";
-
-            // 1. Query /file/latest first — authoritative latest release file info from Files manager
-            var fileRes = DoRequest("/file/latest", payload);
-            if (fileRes != null && fileRes.ContainsKey("status") && fileRes["status"].ToString() == "success")
-            {
-                var data = fileRes.ContainsKey("data") ? fileRes["data"] as Dictionary<string, object> : null;
-                var fileObj = data != null && data.ContainsKey("file") ? data["file"] as Dictionary<string, object> : null;
-                if (fileObj != null)
+                var payload = new Dictionary<string, object>
                 {
-                    if (fileObj.ContainsKey("version_tag") && fileObj["version_tag"] != null)
+                    { "app_id", ownerid },
+                    { "name", name },
+                    { "version", version },
+                    { "secret", string.IsNullOrEmpty(client_secret) ? "NO_SECRET" : client_secret }
+                };
+
+                string latestVer = "";
+                string dlUrl = "";
+                string fileN = "";
+
+                string CleanVer(string v)
+                {
+                    if (string.IsNullOrEmpty(v)) return "";
+                    v = v.Trim();
+                    if (v.StartsWith("v", StringComparison.OrdinalIgnoreCase))
                     {
-                        latestVer = fileObj["version_tag"].ToString();
+                        v = v.Substring(1);
                     }
-                    if (fileObj.ContainsKey("download_url") && fileObj["download_url"] != null)
+                    return v;
+                }
+
+                // 1. Query /file/latest first — authoritative latest release file info from Files manager
+                var fileRes = DoRequest("/file/latest", payload);
+                if (fileRes != null && fileRes.ContainsKey("status") && fileRes["status"]?.ToString() == "success")
+                {
+                    var data = fileRes.ContainsKey("data") ? fileRes["data"] as Dictionary<string, object> : null;
+                    var fileObj = data != null && data.ContainsKey("file") ? data["file"] as Dictionary<string, object> : null;
+                    if (fileObj != null)
                     {
-                        dlUrl = fileObj["download_url"].ToString();
-                    }
-                    if (fileObj.ContainsKey("name") && fileObj["name"] != null)
-                    {
-                        fileN = fileObj["name"].ToString();
+                        if (fileObj.ContainsKey("version_tag") && fileObj["version_tag"] != null)
+                        {
+                            latestVer = fileObj["version_tag"].ToString();
+                        }
+                        if (fileObj.ContainsKey("download_url") && fileObj["download_url"] != null)
+                        {
+                            dlUrl = fileObj["download_url"].ToString();
+                        }
+                        if (fileObj.ContainsKey("name") && fileObj["name"] != null)
+                        {
+                            fileN = fileObj["name"].ToString();
+                        }
                     }
                 }
-            }
 
-            if (string.IsNullOrEmpty(dlUrl))
-            {
-                if (!string.IsNullOrEmpty(info.latest_version) && info.latest_version != version)
+                // 2. Query /init endpoint as fallback/enrichment
+                var response = DoRequest("/init", payload);
+                string initVer = "";
+                if (response != null && response.ContainsKey("status") && response["status"]?.ToString() == "success")
                 {
-                    LogHelper.LogWarning(
-                        $"[AUTO-UPDATE] A new version ({info.latest_version}) was found but no download URL is set.\n" +
-                        $"  \u2192 Go to Dashboard \u2192 Files \u2192 Upload the update binary.\n" +
-                        $"  \ud83d\udca1 Tip: Set a direct download link as the auto_update_link (not a webpage, not a redirect page)."
-                    );
+                    var appInfo = response.ContainsKey("app_info") ? response["app_info"] as Dictionary<string, object> : null;
+                    if (appInfo != null)
+                    {
+                        initVer = appInfo.ContainsKey("version") && appInfo["version"] != null ? appInfo["version"].ToString() : "";
+                        if (string.IsNullOrEmpty(latestVer) || (!string.IsNullOrEmpty(initVer) && CleanVer(initVer) != CleanVer(version)))
+                        {
+                            latestVer = initVer;
+                        }
+                        if (string.IsNullOrEmpty(dlUrl))
+                        {
+                            dlUrl = appInfo.ContainsKey("auto_update_link") && appInfo["auto_update_link"] != null ? appInfo["auto_update_link"].ToString() : "";
+                        }
+                    }
                 }
-                // Fallback: generic download endpoint
-                dlUrl = $"{api_url}/file/latest/download?app_id={ownerid}";
+
+                info.latest_version = string.IsNullOrEmpty(latestVer) ? (string.IsNullOrEmpty(initVer) ? version : initVer) : latestVer;
+                info.file_name = fileN;
+
+                string cleanCurrent = CleanVer(version);
+                string cleanLatest = CleanVer(info.latest_version);
+                string cleanInit = CleanVer(initVer);
+
+                if ((!string.IsNullOrEmpty(info.latest_version) && cleanLatest != cleanCurrent) ||
+                    (!string.IsNullOrEmpty(cleanInit) && cleanInit != cleanCurrent))
+                {
+                    info.update_available = true;
+                }
+
+                // Always target the Latest Mark release endpoint (/download/latest/:appName) for auto-update
+                dlUrl = $"{api_url}/download/latest/{name}";
+                info.download_url = dlUrl;
             }
-
-            info.latest_version = string.IsNullOrEmpty(latestVer) ? version : latestVer;
-            info.download_url = dlUrl;
-            info.file_name = fileN;
-
-            if (!string.IsNullOrEmpty(info.latest_version) && info.latest_version != version)
+            catch (Exception ex)
             {
+                LogHelper.LogError($"[AUTO-UPDATE] Exception in CheckForUpdates: {ex.Message}");
+                info.download_url = $"{api_url}/download/latest/{name}";
                 info.update_available = true;
             }
 
@@ -1758,30 +1790,9 @@ namespace AuthLX
 
         public bool PerformUpdate(UpdateInfo info)
         {
-            if (info == null || !info.update_available)
+            if (info == null || !info.update_available || string.IsNullOrEmpty(info.download_url))
             {
-                LogHelper.LogError("[AUTO-UPDATE] No update is available to install.");
-                return false;
-            }
-
-            if (string.IsNullOrEmpty(info.download_url))
-            {
-                LogHelper.LogError(
-                    "[AUTO-UPDATE] Cannot install update: no download URL is available.\n" +
-                    "  \u2192 Upload the update binary in your AuthLX Dashboard \u2192 Files section.\n" +
-                    "  \ud83d\udca1 Tip: The auto_update_link must be a DIRECT download URL (binary/executable), not a webpage."
-                );
-                return false;
-            }
-
-            // Validate URL before downloading
-            LogHelper.LogInfo($"[AUTO-UPDATE] Validating download URL: {info.download_url}");
-            Console.WriteLine("  \ud83d\udca1 Tip: Make sure the URL above is a direct download link, not a webpage.");
-            var (isValid, errMsg) = ValidateDownloadUrl(info.download_url);
-            if (!isValid)
-            {
-                LogHelper.LogError($"[AUTO-UPDATE] URL validation failed:\n{errMsg}");
-                LogHelper.LogError("[AUTO-UPDATE] Continuing without update. The application will keep running the current version.");
+                LogHelper.LogError("[AUTO-UPDATE] Cannot install update: download URL empty or update not available.");
                 return false;
             }
 
@@ -1792,44 +1803,68 @@ namespace AuthLX
                 return false;
             }
 
-            string newTempPath = currentExe + ".new";
-            LogHelper.LogInfo($"[AUTO-UPDATE] Downloading update from: {info.download_url}");
+            string backupExe = currentExe + ".old";
 
-            if (!DownloadFileHttp(info.download_url, newTempPath))
+            LogHelper.LogInfo($"[AUTO-UPDATE] Preparing file update for: {currentExe}");
+            LogHelper.LogInfo($"[AUTO-UPDATE] Renaming current binary to backup: {backupExe}");
+
+            try
             {
-                LogHelper.LogError(
-                    "[AUTO-UPDATE] Download failed. The application will keep running the current version.\n" +
-                    "  \ud83d\udca1 Tip: Ensure the auto_update_link in your Dashboard is a direct download URL."
-                );
-                if (File.Exists(newTempPath))
+                if (File.Exists(backupExe)) File.Delete(backupExe);
+                File.Move(currentExe, backupExe);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogWarning($"[AUTO-UPDATE] Rename self to .old failed ({ex.Message}). Attempting direct overwrite...");
+            }
+
+            LogHelper.LogInfo($"[AUTO-UPDATE] Downloading update from: {info.download_url}");
+            bool downloadOk = DownloadFileHttp(info.download_url, currentExe);
+
+            // If initial download fails or file is not found, wait 10 seconds and retry one last time
+            if (!downloadOk)
+            {
+                LogHelper.LogWarning("[AUTO-UPDATE] File download failed or not found! Waiting 10 seconds before final retry attempt...");
+                Thread.Sleep(10000);
+
+                string latestFallback = $"{api_url}/download/latest/{name}";
+                LogHelper.LogInfo($"[AUTO-UPDATE] Retrying final download attempt from: {latestFallback}");
+                downloadOk = DownloadFileHttp(latestFallback, currentExe);
+            }
+
+            if (!downloadOk)
+            {
+                LogHelper.LogError("[AUTO-UPDATE] Final download retry failed! No latest release file available. Restoring backup and exiting...");
+                try
                 {
-                    try { File.Delete(newTempPath); } catch { }
+                    if (File.Exists(backupExe))
+                    {
+                        if (File.Exists(currentExe)) File.Delete(currentExe);
+                        File.Move(backupExe, currentExe);
+                    }
                 }
+                catch { }
+                Environment.Exit(1);
                 return false;
             }
 
-            LogHelper.LogInfo("[AUTO-UPDATE] Download completed successfully. Launching process handoff...");
+            LogHelper.LogInfo("[AUTO-UPDATE] Download completed successfully! Launching updated executable...");
 
             try
             {
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = newTempPath,
-                    Arguments = $"--authlx-update-finish \"{currentExe}\"",
+                    FileName = currentExe,
                     UseShellExecute = true
                 });
 
-                LogHelper.LogInfo("[AUTO-UPDATE] Handed off execution to updated binary. Terminating old process.");
+                LogHelper.LogInfo("[AUTO-UPDATE] Updated executable launched successfully. Exiting old process...");
                 Environment.Exit(0);
                 return true;
             }
             catch (Exception ex)
             {
-                LogHelper.LogError($"[AUTO-UPDATE] Failed to spawn updater process: {ex.Message}");
-                if (File.Exists(newTempPath))
-                {
-                    try { File.Delete(newTempPath); } catch { }
-                }
+                LogHelper.LogError($"[AUTO-UPDATE] Failed to launch updated executable: {ex.Message}");
                 return false;
             }
         }
