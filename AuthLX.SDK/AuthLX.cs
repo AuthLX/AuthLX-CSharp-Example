@@ -1695,19 +1695,7 @@ namespace AuthLX
             string dlUrl = "";
             string fileN = "";
 
-            // 1. Query /init
-            var response = DoRequest("/init", payload);
-            if (response != null && response.ContainsKey("status") && response["status"].ToString() == "success")
-            {
-                var appInfo = response.ContainsKey("app_info") ? response["app_info"] as Dictionary<string, object> : null;
-                if (appInfo != null)
-                {
-                    latestVer = appInfo.ContainsKey("version") ? appInfo["version"].ToString() : "";
-                    dlUrl = appInfo.ContainsKey("auto_update_link") ? appInfo["auto_update_link"].ToString() : "";
-                }
-            }
-
-            // 2. Query /file/latest
+            // 1. Query /file/latest first — authoritative latest release file info from Files manager
             var fileRes = DoRequest("/file/latest", payload);
             if (fileRes != null && fileRes.ContainsKey("status") && fileRes["status"].ToString() == "success")
             {
@@ -1715,15 +1703,15 @@ namespace AuthLX
                 var fileObj = data != null && data.ContainsKey("file") ? data["file"] as Dictionary<string, object> : null;
                 if (fileObj != null)
                 {
-                    if (string.IsNullOrEmpty(latestVer) && fileObj.ContainsKey("version_tag"))
+                    if (fileObj.ContainsKey("version_tag") && fileObj["version_tag"] != null)
                     {
                         latestVer = fileObj["version_tag"].ToString();
                     }
-                    if (string.IsNullOrEmpty(dlUrl) && fileObj.ContainsKey("download_url"))
+                    if (fileObj.ContainsKey("download_url") && fileObj["download_url"] != null)
                     {
                         dlUrl = fileObj["download_url"].ToString();
                     }
-                    if (fileObj.ContainsKey("name"))
+                    if (fileObj.ContainsKey("name") && fileObj["name"] != null)
                     {
                         fileN = fileObj["name"].ToString();
                     }
