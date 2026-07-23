@@ -455,14 +455,25 @@ namespace AuthLX
                         return;
                     }
 
-                    if (serverVersion != version)
+                    string CleanVer(string v)
+                    {
+                        if (string.IsNullOrEmpty(v)) return "";
+                        v = v.Trim();
+                        if (v.StartsWith("v", StringComparison.OrdinalIgnoreCase))
+                        {
+                            v = v.Substring(1);
+                        }
+                        return v;
+                    }
+
+                    if (CleanVer(serverVersion) != CleanVer(version))
                     {
                         LogHelper.LogError($"[UPDATE REQUIRED] Application version is outdated! Current: {version} | Required: {serverVersion}");
                         last_message = $"Application version is outdated! Current: {version} | Required: {serverVersion}";
 
                         if (auto_update_enabled)
                         {
-                            LogHelper.LogInfo($"[AUTO-UPDATE] Initiating auto-update to v{serverVersion}...");
+                            LogHelper.LogInfo($"[AUTO-UPDATE] Initiating auto-update to {serverVersion}...");
                             UpdateInfo info = CheckForUpdates();
                             if (info.update_available)
                             {
