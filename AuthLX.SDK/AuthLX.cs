@@ -398,7 +398,7 @@ namespace AuthLX
             this.version = version;
             this.client_secret = secret;
             this.hash_to_check = string.IsNullOrEmpty(hashToCheck) ? Others.GetChecksum() : hashToCheck;
-            this.api_url = string.IsNullOrEmpty(apiUrl) ? "https://api.authlx.com/api/v1/client" : apiUrl;
+            this.api_url = string.IsNullOrEmpty(apiUrl) ? "https://api.authlx.com/api/v2/client" : apiUrl;
 
             // Configure TLS security protocol to standard modern levels (TLS 1.2 / TLS 1.3)
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | (SecurityProtocolType)12288; // 12288 = Tls13
@@ -843,7 +843,30 @@ namespace AuthLX
             };
 
             var response = DoRequest("/verify-session", payload);
-            return (response != null && response.ContainsKey("status") && response["status"].ToString() == "success");
+            if (response != null && response.ContainsKey("status") && response["status"].ToString() == "success")
+            {
+                if (response.ContainsKey("data") && response["data"] is Dictionary<string, object> data)
+                {
+                    bool isValid = false;
+                    if (data.ContainsKey("is_valid"))
+                    {
+                        string val = data["is_valid"].ToString().ToLower();
+                        isValid = (val == "true" || val == "1");
+                    }
+                    if (!isValid) return false;
+
+                    if (data.ContainsKey("subscription") && data["subscription"] != null)
+                    {
+                        user_data.subscription = data["subscription"].ToString();
+                    }
+                    if (data.ContainsKey("expiry") && data["expiry"] != null)
+                    {
+                        user_data.expires = data["expiry"].ToString();
+                    }
+                }
+                return true;
+            }
+            return false;
         }
 
         public bool verifyToken(string standaloneToken)
@@ -1262,6 +1285,33 @@ namespace AuthLX
                     using (StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
                     {
                         string respStr = reader.ReadToEnd();
+
+                        // ── SRP (Signed Response Protocol) Verification ──────────────
+                        if (!string.IsNullOrEmpty(client_secret))
+                        {
+                            string sigHeader = response.Headers["X-Response-Sig"];
+                            string nonceHeader = response.Headers["X-Response-Nonce"];
+
+                            if (string.IsNullOrEmpty(sigHeader) || string.IsNullOrEmpty(nonceHeader))
+                            {
+                                LogHelper.LogError("[SECURITY] Missing SRP headers from server! MITM Interception Detected.");
+                                Environment.Exit(1);
+                            }
+
+                            using (HMACSHA256 hmac = new HMACSHA256(Encoding.UTF8.GetBytes(client_secret)))
+                            {
+                                byte[] hashBytes = hmac.ComputeHash(Encoding.UTF8.GetBytes($"{respStr}:{nonceHeader}"));
+                                string expectedSig = BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+
+                                if (expectedSig != sigHeader.ToLower())
+                                {
+                                    LogHelper.LogError("[SECURITY] SRP Signature mismatch! Server response was spoofed.");
+                                    Environment.Exit(1);
+                                }
+                            }
+                        }
+                        // ─────────────────────────────────────────────────────────────
+
                         if (debug)
                         {
                             string safeResp = respStr.Length > 200 ? respStr.Substring(0, 200) + "..." : respStr;
