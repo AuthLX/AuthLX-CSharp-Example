@@ -388,6 +388,12 @@ namespace AuthLX_CSharp_Example
             // Configure allowed hosts locking whitelist
             authlxapp.set_allowed_hosts(new List<string> { "api.authlx.com" });
 
+            // Optional TLS Certificate Pinning (Chain-Aware)
+            // Cloudflare / Google Trust Services (GTS Root R1)
+            authlxapp.add_pinned_cert("d947432abde7b7fa90fc2e6b59101b1280e0e1c7e4e40fa3c6887fff57a7f4cf");
+            // Baltimore CyberTrust Root (Cloudflare legacy fallback)
+            authlxapp.add_pinned_cert("16af57a9f676b0ab126095aa5ebafc57b8c71b6ab4945d81b85bbd13c77148a0");
+
             Console.WriteLine($"✓ Initialised in {(string.IsNullOrEmpty(authlxapp.client_secret) ? "OFF" : "SECURE")} mode.");
             Console.WriteLine($"  HWID Method : {authlxapp.hwid_method}");
             Console.WriteLine($"  HWID        : {Others.GetHWID(authlxapp.hwid_method)}");

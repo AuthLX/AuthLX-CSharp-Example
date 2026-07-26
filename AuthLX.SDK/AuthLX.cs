@@ -386,6 +386,7 @@ namespace AuthLX
 
         private readonly List<string> allowed_hosts = new List<string>();
         private readonly List<string> pinned_public_keys = new List<string>();
+        private readonly List<string> pinned_cert_hashes = new List<string>();
 
         private Thread ban_monitor_thread = null;
         private bool ban_monitor_active = false;
@@ -1049,6 +1050,16 @@ namespace AuthLX
             pinned_public_keys.Clear();
         }
 
+        public void add_pinned_cert(string sha256_hash)
+        {
+            if (string.IsNullOrEmpty(sha256_hash)) return;
+            sha256_hash = sha256_hash.Trim().ToLower();
+            if (!pinned_cert_hashes.Contains(sha256_hash))
+            {
+                pinned_cert_hashes.Add(sha256_hash);
+            }
+        }
+
         // ─── Secure Cryptography (XOR / Seal) ────────────────────────────────────
 
         public void enable_secure_strings()
@@ -1259,6 +1270,66 @@ namespace AuthLX
                 request.Timeout = 5000;
                 request.ReadWriteTimeout = 5000;
 
+                // ── TLS Certificate Pinning Verification ───────────────────────
+                if (pinned_cert_hashes.Count > 0)
+                {
+                    request.ServerCertificateValidationCallback = (sender, cert, chain, errors) =>
+                    {
+                        if (errors != System.Net.Security.SslPolicyErrors.None)
+                        {
+                            LogHelper.LogError($"[SECURITY] TLS Policy Error detected: {errors}");
+                            return false;
+                        }
+
+                        if (chain == null || chain.ChainElements.Count == 0)
+                        {
+                            LogHelper.LogError("[SECURITY] Certificate chain is empty.");
+                            return false;
+                        }
+
+                        bool pinMatched = false;
+                        List<string> actualHashes = new List<string>();
+
+                        foreach (var element in chain.ChainElements)
+                        {
+                            try
+                            {
+                                byte[] rawData = element.Certificate.RawData;
+                                using (SHA256 sha256 = SHA256.Create())
+                                {
+                                    byte[] hashBytes = sha256.ComputeHash(rawData);
+                                    string actualHash = BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+                                    actualHashes.Add(actualHash);
+
+                                    if (pinned_cert_hashes.Contains(actualHash))
+                                    {
+                                        pinMatched = true;
+                                        break; // Valid root/intermediate/leaf found!
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                LogHelper.LogError($"Error hashing chain certificate: {ex.Message}");
+                            }
+                        }
+
+                        if (!pinMatched)
+                        {
+                            LogHelper.LogError("[SECURITY] TLS Certificate Chain Pinning FAILED! MITM Detected.");
+                            foreach (var h in actualHashes)
+                            {
+                                LogHelper.LogError($"[SECURITY] Chain Cert Hash: {h}");
+                            }
+                            // Hard terminate the application
+                            Environment.Exit(1);
+                            return false;
+                        }
+
+                        return true;
+                    };
+                }
+
                 string postDataStr = SimpleJson.Serialize(postData);
 
                 if (debug)
@@ -1298,14 +1369,30 @@ namespace AuthLX
                                 Environment.Exit(1);
                             }
 
+                            string canonicalBody;
+                            try
+                            {
+                                canonicalBody = SimpleJson.SerializeCanonical(SimpleJson.Deserialize(respStr));
+                            }
+                            catch
+                            {
+                                canonicalBody = respStr;
+                            }
+
                             using (HMACSHA256 hmac = new HMACSHA256(Encoding.UTF8.GetBytes(client_secret)))
                             {
-                                byte[] hashBytes = hmac.ComputeHash(Encoding.UTF8.GetBytes($"{respStr}:{nonceHeader}"));
+                                string payload = $"{canonicalBody}:{nonceHeader}";
+                                byte[] hashBytes = hmac.ComputeHash(Encoding.UTF8.GetBytes(payload));
                                 string expectedSig = BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
 
                                 if (expectedSig != sigHeader.ToLower())
                                 {
                                     LogHelper.LogError("[SECURITY] SRP Signature mismatch! Server response was spoofed.");
+                                    LogHelper.LogError($"[SRP] client_secret: {client_secret}");
+                                    LogHelper.LogError($"[SRP] payload: {payload}");
+                                    LogHelper.LogError($"[SRP] expected_sig: {expectedSig}");
+                                    LogHelper.LogError($"[SRP] sig_header: {sigHeader}");
+                                    LogHelper.LogError($"[SRP] nonce_header: {nonceHeader}");
                                     Environment.Exit(1);
                                 }
                             }
@@ -1962,6 +2049,48 @@ namespace AuthLX
                     if (!first) sb.Append(",");
                     first = false;
                     sb.Append(Serialize(val));
+                }
+                sb.Append("]");
+                return sb.ToString();
+            }
+
+            return "\"" + EscapeString(obj.ToString()) + "\"";
+        }
+
+        public static string SerializeCanonical(object obj)
+        {
+            if (obj == null) return "null";
+            if (obj is string s) return "\"" + EscapeString(s) + "\"";
+            if (obj is bool b) return b ? "true" : "false";
+            if (obj is double || obj is float || obj is int || obj is long) return obj.ToString();
+            
+            if (obj is IDictionary<string, object> dict)
+            {
+                var sortedKeys = new List<string>(dict.Keys);
+                sortedKeys.Sort(StringComparer.Ordinal);
+                StringBuilder sb = new StringBuilder();
+                sb.Append("{");
+                bool first = true;
+                foreach (var key in sortedKeys)
+                {
+                    if (!first) sb.Append(",");
+                    first = false;
+                    sb.Append("\"").Append(EscapeString(key)).Append("\":").Append(SerializeCanonical(dict[key]));
+                }
+                sb.Append("}");
+                return sb.ToString();
+            }
+
+            if (obj is System.Collections.IEnumerable list)
+            {
+                StringBuilder sb = new StringBuilder();
+                sb.Append("[");
+                bool first = true;
+                foreach (var val in list)
+                {
+                    if (!first) sb.Append(",");
+                    first = false;
+                    sb.Append(SerializeCanonical(val));
                 }
                 sb.Append("]");
                 return sb.ToString();
