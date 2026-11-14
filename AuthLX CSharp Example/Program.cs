@@ -9,11 +9,12 @@ namespace AuthLX_CSharp_Example
     internal class Program
     {
         public static api AuthLXApp = new api(
-    name: "fakelag", 
-    ownerid: "0980ac9c-586d-44d0-8719-3dd9fbcec374",
-    secret: "744d4489c4edeea10be71f7f92e94cd0103ca2b44b3cb24d975304288e7454ad",
-    version: "1.3"
-);
+            name: "fakelag", 
+            ownerid: "0980ac9c-586d-44d0-8719-3dd9fbcec374",
+            secret: "", // Zero-Secret binary mode (No secret embedded in binary)
+            version: "1.9",
+            publicKey: "f1c773b031489f4ae17d08b7aa83b8dc9035cbf73db5c8bd8cb9cfafd234d763" // Ed25519 Public Key for RFC 8032 response verification
+        );
 
         private static void ClearConsole()
         {
@@ -30,7 +31,7 @@ namespace AuthLX_CSharp_Example
         private static void ShowBanner(api authlxapp)
         {
             ClearConsole();
-            string mode = string.IsNullOrEmpty(authlxapp.client_secret) ? "OFF ⚠" : "SECURE 🔒";
+            string mode = !string.IsNullOrEmpty(authlxapp.public_key) ? "ZERO-SECRET (Ed25519) 🔒" : (string.IsNullOrEmpty(authlxapp.client_secret) ? "OFF ⚠" : "SECURE (HMAC) 🔒");
             Console.WriteLine("╔" + new string('=', 58) + "╗");
 
             string title = "║  " + authlxapp.name + "  —  Powered by AuthLX";

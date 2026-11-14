@@ -362,6 +362,7 @@ namespace AuthLX
         public string ownerid { get; private set; }
         public string version { get; private set; }
         public string client_secret { get; private set; }
+        public string public_key { get; private set; }
         public string hash_to_check { get; private set; }
         public string api_url { get; private set; }
         public string session_token { get; private set; } = "";
@@ -392,17 +393,30 @@ namespace AuthLX
         private bool ban_monitor_active = false;
         private readonly object ban_monitor_lock = new object();
 
-        public api(string name, string ownerid, string version, string secret = "", string hashToCheck = "", string apiUrl = "")
+        public api(string name, string ownerid, string version, string secret = "", string hashToCheck = "", string apiUrl = "", string publicKey = "")
         {
             this.name = name;
             this.ownerid = ownerid;
             this.version = version;
             this.client_secret = secret;
+            this.public_key = publicKey;
             this.hash_to_check = string.IsNullOrEmpty(hashToCheck) ? Others.GetChecksum() : hashToCheck;
-            this.api_url = string.IsNullOrEmpty(apiUrl) ? "https://api.authlx.com/api/v2/client" : apiUrl;
+            
+            if (string.IsNullOrEmpty(apiUrl))
+            {
+                this.api_url = !string.IsNullOrEmpty(publicKey) ? "https://api.authlx.com/api/v3/client" : "https://api.authlx.com/api/v2/client";
+            }
+            else
+            {
+                this.api_url = apiUrl;
+            }
 
             // Configure TLS security protocol to standard modern levels (TLS 1.2 / TLS 1.3)
-            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | (SecurityProtocolType)12288; // 12288 = Tls13
+            try
+            {
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | (SecurityProtocolType)12288; // 12288 = Tls13
+            }
+            catch { }
 
             init();
         }
@@ -1330,6 +1344,20 @@ namespace AuthLX
                     };
                 }
 
+                if (!string.IsNullOrEmpty(public_key) || !string.IsNullOrEmpty(client_secret))
+                {
+                    string nonce = GenerateNonce(32);
+                    if (!postData.ContainsKey("request_nonce"))
+                    {
+                        postData["request_nonce"] = nonce;
+                    }
+                    if (!postData.ContainsKey("req_nonce"))
+                    {
+                        postData["req_nonce"] = nonce;
+                    }
+                    request.Headers["X-Request-Nonce"] = nonce;
+                }
+
                 string postDataStr = SimpleJson.Serialize(postData);
 
                 if (debug)
@@ -1357,8 +1385,41 @@ namespace AuthLX
                     {
                         string respStr = reader.ReadToEnd();
 
-                        // ── SRP (Signed Response Protocol) Verification ──────────────
-                        if (!string.IsNullOrEmpty(client_secret))
+                        // ── Ed25519 Asymmetric Verification (API v3 / Zero-Secret Mode) ──
+                        if (!string.IsNullOrEmpty(public_key))
+                        {
+                            string edSigHeader = response.Headers["X-Signature-Ed25519"];
+                            string edTsHeader = response.Headers["X-Signature-Timestamp"];
+                            string edNonceHeader = response.Headers["X-Signature-Nonce"];
+
+                            if (string.IsNullOrEmpty(edSigHeader) || string.IsNullOrEmpty(edTsHeader) || string.IsNullOrEmpty(edNonceHeader))
+                            {
+                                LogHelper.LogError("[SECURITY] Missing Ed25519 response signature headers from server! MITM Interception Detected.");
+                                Environment.Exit(1);
+                            }
+
+                            string canonicalBody;
+                            try
+                            {
+                                canonicalBody = SimpleJson.SerializeCanonical(SimpleJson.Deserialize(respStr));
+                            }
+                            catch
+                            {
+                                canonicalBody = respStr;
+                            }
+
+                            string payloadToVerify = $"{edTsHeader}:{edNonceHeader}:{canonicalBody}";
+                            if (!Ed25519.VerifyHex(edSigHeader, payloadToVerify, public_key))
+                            {
+                                LogHelper.LogError("[SECURITY] Ed25519 Signature mismatch! Server response was spoofed or tampered.");
+                                LogHelper.LogError($"[Ed25519] public_key: {public_key}");
+                                LogHelper.LogError($"[Ed25519] sig_header: {edSigHeader}");
+                                LogHelper.LogError($"[Ed25519] payload: {payloadToVerify}");
+                                Environment.Exit(1);
+                            }
+                        }
+                        // ── SRP (Signed Response Protocol) HMAC Verification (API v2 / Fallback) ──
+                        else if (!string.IsNullOrEmpty(client_secret))
                         {
                             string sigHeader = response.Headers["X-Response-Sig"];
                             string nonceHeader = response.Headers["X-Response-Nonce"];
@@ -1516,10 +1577,10 @@ namespace AuthLX
         {
             string lmsg = msg.ToLower();
 
-            if (lmsg.Contains("signature") || lmsg.Contains("hmac"))
+            if (lmsg.Contains("signature") || lmsg.Contains("hmac") || lmsg.Contains("ed25519"))
             {
-                LogHelper.LogWarn("[ANTI-TAMPER] HMAC verification failed. Possible causes:\n" +
-                                  "  1. client_secret is wrong — copy it exactly from the dashboard.\n" +
+                LogHelper.LogWarn("[ANTI-TAMPER] Signature verification failed. Possible causes:\n" +
+                                  "  1. public_key or client_secret does not match the dashboard/server.\n" +
                                   "  2. System clock is more than 5 minutes off — sync your clock.");
             }
             else if (lmsg.Contains("application not found"))
