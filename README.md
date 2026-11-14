@@ -31,8 +31,9 @@ A professional C# reference implementation demonstrating integration with **[Aut
 
 ## Key Features
 
-* **Zero External Dependencies**: Uses a custom, built-in `SimpleJson` engine for lightweight, self-contained compilation with zero NuGet package restores.
-* **Compatibility across C# App Types**: Engineered to run safely on Console, Windows Forms (WinForms), WPF, Class Libraries, and background services without crashes.
+* **Zero-Secret Binary Mode (Ed25519 RFC 8032)**: Asymmetric server-signed responses allow distributing binaries without embedding secret API keys.
+* **Zero External Dependencies**: Standalone RFC 8032 Ed25519 verifier and built-in `SimpleJson` engine for lightweight, self-contained compilation with zero NuGet package dependencies.
+* **Compatibility across C# App Types**: Engineered to run safely on Console, Windows Forms (WinForms), WPF, Class Libraries, and background services across `.NET Framework 4.7.2`, `.NET Standard 2.0`, `.NET 8.0`, and `.NET 9.0`.
 * **Modern Thread-Safe Logger**: Concurrent logger writing to both console and log files (`logs/sdk.log`). Uses C# caller information attributes for compile-time filename and member extraction.
 * **Non-Blocking Network Queries**: Supports integration within asynchronous worker loops.
 * **Secure HWID Collection**: Native Win32 user SID extraction and 64-bit Registry `MachineGuid` readers to prevent duplication.
@@ -84,11 +85,13 @@ Define a static instance of `AuthLX.api` as your global entry point:
 ```csharp
 using AuthLX;
 
+// Zero-Secret Mode (Recommended): Leave secret empty and provide your server Ed25519 public key
 public static api AuthLXApp = new api(
     name: "your_application_name", 
     ownerid: "your_application_owner_id_from_dashboard",
-    secret: "your_application_secret_key_from_dashboard",
-    version: "1.0"
+    version: "1.0",
+    secret: "", // Zero-Secret Mode: No secret stored in binary
+    publicKey: "f1c773b031489f4ae17d08b7aa83b8dc9035cbf73db5c8bd8cb9cfafd234d763"
 );
 ```
 
